@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redirection…</title>
+<style>
+  :root{ --em:#34d399; --lime:#a6e34d; --bg:#061710; --text:#eafff5; --text2:#7fa696; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:radial-gradient(55% 38% at 10% 0%, rgba(52,211,153,0.16) 0%, transparent 60%), linear-gradient(165deg,#030805 0%,#061710 40%,#081f16 100%);
+    color:var(--text); font-family:'Inter',system-ui,sans-serif;
+    display:flex; align-items:center; justify-content:center; min-height:100vh;
+  }
+  .box{ text-align:center; }
+  .spinner{
+    width:38px; height:38px; margin:0 auto 18px;
+    border:3px solid rgba(52,211,153,0.2); border-top-color:var(--em);
+    border-radius:50%; animation:spin .8s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  p{ color:var(--text2); font-size:.85rem; }
+  a{ color:var(--em); }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="spinner"></div>
+    <p id="msg">Redirection en cours…</p>
+  </div>
+
+<script>
+  // ============================================================
+  // ⚠️ CONFIGURATION SUPABASE — mêmes valeurs que dans dashboard.html
+  // ============================================================
+  const SUPABASE_URL = 'https://TON-PROJET.supabase.co';
+  const SUPABASE_ANON_KEY = 'TA_CLE_ANON_PUBLIC';
+  const SUPABASE_SCHEMA = 'creo';
+  // ============================================================
+
+  // ⚠️ URL réelle du site Au Grès du Sud vers laquelle rediriger.
+  const DEFAULT_DESTINATION = "https://www.augresdusud.com/";
+
+  // Si un jour tu veux qu'une idée précise pointe vers une page différente :
+  // "ID_DE_L_IDEE": "https://www.augresdusud.com/page-specifique"
+  const DESTINATION_OVERRIDES = {
+    // "abc1234": "https://www.augresdusud.com/atelier-tournage"
+  };
+
+  function getParam(name){
+    return new URLSearchParams(window.location.search).get(name);
+  }
+
+  async function recordClick(ideaId){
+    try{
+      await fetch(`${SUPABASE_URL}/rest/v1/click_events`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+          'Content-Profile': SUPABASE_SCHEMA,
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ idea_id: ideaId }),
+      });
+    }catch(e){
+      // Si Supabase est indisponible, on ne bloque pas la redirection —
+      // mieux vaut perdre un clic dans les stats que perdre une vente.
+    }
+  }
+
+  async function go(){
+    const id = getParam('id');
+
+    if(!id){
+      document.getElementById('msg').innerHTML =
+        'Lien invalide — aucun identifiant d\'idée fourni. <a href="' + DEFAULT_DESTINATION + '">Continuer vers le site</a>';
+      return;
+    }
+
+    await recordClick(id);
+
+    const destination = DESTINATION_OVERRIDES[id] || DEFAULT_DESTINATION;
+
+    // On passe l'id en paramètre à la page de destination : le script Velo
+    // posé sur le site Au Grès du Sud peut le lire pour mémoriser
+    // "ce visiteur vient de l'idée X" pendant sa visite.
+    const url = new URL(destination);
+    url.searchParams.set('creo_ref', id);
+
+    window.location.replace(url.toString());
+  }
+
+  go();
+</script>
+</body>
+</html>
