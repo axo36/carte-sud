@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#061710">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co; img-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';">
+<!-- Démarre la négociation DNS/TLS avec Supabase dès le chargement de la
+     page, en parallèle de l'affichage — gagne un aller-retour réseau
+     complet avant même le premier appel à l'API. -->
+<link rel="preconnect" href="https://yueskrpxwvgwvbgmctru.supabase.co" crossorigin>
+<link rel="dns-prefetch" href="https://yueskrpxwvgwvbgmctru.supabase.co">
+<title>Redirection…</title>
+<style>
+  :root{ --em:#34d399; --lime:#a6e34d; --clay:#c17a45; --bg:#061710; --text:#eafff5; --text2:#7fa696; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:radial-gradient(55% 38% at 10% 0%, rgba(52,211,153,0.16) 0%, transparent 60%), linear-gradient(165deg,#030805 0%,#061710 40%,#081f16 100%);
+    color:var(--text); font-family:'Inter',system-ui,sans-serif;
+    display:flex; align-items:center; justify-content:center;
+    min-height:100vh; min-height:100dvh;
+  }
+  .box{ text-align:center; padding:0 28px; max-width:340px; }
+
+  .mark{
+    width:52px; height:52px; margin:0 auto 22px; position:relative;
+  }
+  .mark svg{ width:100%; height:100%; }
+
+  .spinner{
+    width:34px; height:34px; margin:0 auto 20px;
+    border:3px solid rgba(52,211,153,0.15);
+    border-top-color:var(--em); border-right-color:var(--clay);
+    border-radius:50%; animation:spin .85s cubic-bezier(.5,.15,.5,.85) infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  h1{ font-size:.95rem; font-weight:600; margin:0 0 6px; color:var(--text); letter-spacing:.2px; }
+  p{ color:var(--text2); font-size:.8rem; line-height:1.6; margin:0; min-height:1.3em; }
+  a{ color:var(--em); word-break:break-word; }
+
+  #tagline{ opacity:0; transition:opacity .4s ease; }
+  #tagline.show{ opacity:1; }
+  #logoImg{ width:100%; height:100%; border-radius:13px; object-fit:cover; display:block; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="mark" id="mark" aria-hidden="true">
+      <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+        <rect width="48" height="48" rx="13" fill="#0a0b0c"/>
+        <circle cx="24" cy="24" r="15" fill="none" stroke="var(--lime)" stroke-width="3" stroke-dasharray="66 100" stroke-linecap="round" transform="rotate(-40 24 24)"/>
+        <circle cx="24" cy="24" r="9.5" fill="none" stroke="var(--clay)" stroke-width="2" opacity="0.9"/>
+        <circle cx="24" cy="24" r="3.4" fill="var(--em)"/>
+      </svg>
+    </div>
+    <div class="spinner" id="spinner"></div>
+    <h1 id="brandTitle">Au Grès du Sud</h1>
+    <p id="tagline">Un instant, on vous y emmène…</p>
+  </div>
+
+<script>
+  // ============================================================
+  // ⚠️ CONFIGURATION SUPABASE — mêmes valeurs que dans dashboard.html
+  // ============================================================
+  const SUPABASE_URL = 'https://yueskrpxwvgwvbgmctru.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_CApGDmos5-0TOiim7xDcIQ_5Jo8xFSi';
+  const SUPABASE_SCHEMA = 'creo';
+  // ============================================================
+
+  // ⚠️ URL réelle du site Au Grès du Sud vers laquelle rediriger par défaut,
+  // si aucune idée ne correspond au lien cliqué (filet de sécurité ultime).
+  const DEFAULT_DESTINATION = "https://www.augresdusud.com/";
+
+  // Slug utilisé quand le lien ne contient AUCUN paramètre ?id=... — c'est
+  // le cas d'un lien imprimé tel quel (ex : "carte.augresdusud.com" sur une
+  // carte de visite, sans rien après). Crée une idée avec ce slug dans le
+  // dashboard (onglet Idées > Personnaliser ce lien > Slug) et mets-y la
+  // vraie destination souhaitée.
+  const DEFAULT_IDEA_SLUG = 'carte';
+
+  // Temps maximum qu'on attend Supabase avant de rediriger quand même vers
+  // le site par défaut — un visiteur ne doit jamais rester bloqué à
+  // regarder un rond tourner à cause d'un réseau lent ou d'une base qui ne
+  // répond pas.
+  const MAX_WAIT_MS = 2500;
+
+  // Petits messages affichés seulement si l'attente dépasse ~500ms, pour
+  // que ce délai (rare, mais possible sur mauvais réseau) ne se ressente
+  // jamais comme du temps mort — plutôt qu'un simple spinner muet.
+  const TAGLINES = [
+    "Un instant, on vous y emmène…",
+    "Encore une seconde…",
+    "La page arrive…",
+  ];
+  let activeTaglines = TAGLINES;
+
+  // Durée minimale pendant laquelle l'écran personnalisé reste visible
+  // avant de rediriger — sans ça, sur une connexion rapide, la marque
+  // (nom, couleur, logo) s'appliquait et redirigeait dans la même
+  // fraction de seconde : invisible à l'œil nu. Ce court palier garantit
+  // qu'on la voit vraiment, tout en restant imperceptible comme "temps
+  // perdu" (moins d'une seconde, avec un écran déjà aux couleurs du site
+  // de destination).
+  const MIN_DISPLAY_MS = 550;
+
+  function getParam(name){
+    return new URLSearchParams(window.location.search).get(name);
+  }
+
+  function startTaglineRotation(){
+    const el = document.getElementById('tagline');
+    let i = 0;
+    // Le texte reste invisible tant qu'on n'a pas atteint ce délai — une
+    // redirection rapide (cas normal) ne montre jamais rien qui clignote.
+    const revealTimer = setTimeout(()=> el.classList.add('show'), 500);
+    const rotateTimer = setInterval(()=>{
+      i = (i+1) % activeTaglines.length;
+      el.style.opacity = 0;
+      setTimeout(()=>{ el.textContent = activeTaglines[i]; el.style.opacity = 1; }, 200);
+    }, 1600);
+    return () => { clearTimeout(revealTimer); clearInterval(rotateTimer); };
+  }
+
+  // Applique la personnalisation visuelle définie pour cette idée dans le
+  // dashboard (onglet Idées > Personnaliser ce lien), pour que l'écran de
+  // transition ressemble au site de destination plutôt qu'à un outil de
+  // redirection générique.
+  function applyBranding(idea){
+    if(!idea) return;
+    if(idea.brand_name){
+      document.getElementById('brandTitle').textContent = idea.brand_name;
+      document.title = idea.brand_name;
+    }
+    if(idea.brand_tagline){
+      activeTaglines = [idea.brand_tagline];
+      document.getElementById('tagline').textContent = idea.brand_tagline;
+    }
+    if(idea.brand_color && /^#[0-9a-fA-F]{6}$/.test(idea.brand_color)){
+      document.documentElement.style.setProperty('--em', idea.brand_color);
+    }
+    if(idea.brand_logo_url){
+      try{
+        const u = new URL(idea.brand_logo_url);
+        if(u.protocol === 'http:' || u.protocol === 'https:'){
+          const mark = document.getElementById('mark');
+          mark.textContent = '';
+          const img = document.createElement('img');
+          img.id = 'logoImg';
+          img.alt = '';
+          img.src = u.href;
+          mark.appendChild(img);
+        }
+      }catch(e){ /* URL invalide — on garde le logo par défaut */ }
+    }
+  }
+
+  // Identifiant anonyme et persistant du visiteur (stocké sur son appareil)
+  // — sert uniquement à distinguer "nombre de clics" de "nombre de
+  // personnes réelles" (une même personne qui clique 3 fois ne compte
+  // qu'une fois côté visiteurs uniques). Pas de cookie, pas d'IP, pas de
+  // donnée transmise à un tiers.
+  function getVisitorId(){
+    try{
+      let id = localStorage.getItem('creo_visitor_id');
+      if(!id){
+        id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        localStorage.setItem('creo_visitor_id', id);
+      }
+      return id;
+    }catch(e){
+      // Navigation privée / stockage bloqué : on continue sans, cette
+      // visite sera simplement comptée comme "visiteur inconnu".
+      return null;
+    }
+  }
+
+  function getDeviceType(){
+    const ua = navigator.userAgent || '';
+    if(/iPad/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua))) return 'tablette';
+    if(/Mobi|Android|iPhone/i.test(ua)) return 'mobile';
+    return 'ordinateur';
+  }
+
+  // Envoi du clic en tâche de fond : jamais attendu avant la redirection.
+  // keepalive:true garantit que la requête part bel et bien même si la
+  // page a déjà commencé à naviguer ailleurs au moment où elle se termine.
+  function recordClick(ideaId){
+    try{
+      fetch(`${SUPABASE_URL}/rest/v1/click_events`, {
+        method: 'POST',
+        keepalive: true,
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+          'Content-Profile': SUPABASE_SCHEMA,
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          idea_id: ideaId,
+          visitor_id: getVisitorId(),
+          referrer: document.referrer ? document.referrer.slice(0, 500) : null,
+          device_type: getDeviceType(),
+          language: navigator.language || null,
+        }),
+      }).then(res => {
+        // On ne bloque jamais la redirection pour ça, mais on log l'erreur
+        // exacte dans la console (F12 > Console) pour pouvoir diagnostiquer
+        // pourquoi un clic ne s'est pas enregistré, au lieu que ça échoue
+        // en silence complet.
+        if(!res.ok) res.text().then(t => console.warn('[creo] clic non enregistré :', res.status, t));
+      }).catch(err => console.warn('[creo] clic non enregistré (réseau) :', err));
+    }catch(e){
+      // Si Supabase est indisponible, on ne bloque jamais la redirection —
+      // mieux vaut perdre un clic dans les stats que perdre une vente.
+    }
+  }
+
+  // Une seule requête pour chercher l'idée, par id réel OU par slug
+  // personnalisé en même temps (au lieu de deux appels l'un après l'autre)
+  // — ça retire un aller-retour réseau complet du chemin critique.
+  async function getIdea(paramValue){
+    try{
+      const filter = `or=(id.eq.${encodeURIComponent(paramValue)},slug.eq.${encodeURIComponent(paramValue)})`;
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/ideas?${filter}&select=id,destination_url,utm_source,utm_medium,utm_campaign,brand_name,brand_tagline,brand_color,brand_logo_url&limit=1`,
+        {
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Accept-Profile': SUPABASE_SCHEMA,
+          },
+        }
+      );
+      if(!res.ok){
+        const t = await res.text().catch(()=>'');
+        console.warn('[creo] recherche idée échouée :', res.status, t);
+        return null;
+      }
+      const rows = await res.json();
+      return rows && rows.length ? rows[0] : null;
+    }catch(e){
+      return null;
+    }
+  }
+
+  function withTimeout(promise, ms){
+    return Promise.race([
+      promise,
+      new Promise(resolve => setTimeout(()=> resolve(null), ms)),
+    ]);
+  }
+
+  async function go(){
+    const startedAt = Date.now();
+    const stopTagline = startTaglineRotation();
+
+    // Si le lien ne contient pas ?id=..., on retombe sur le slug par
+    // défaut (DEFAULT_IDEA_SLUG) — le visiteur ne voit jamais d'écran
+    // d'erreur, il est toujours redirigé quelque part.
+    const param = getParam('id') || DEFAULT_IDEA_SLUG;
+
+    // On ne laisse jamais Supabase retenir le visiteur plus de
+    // MAX_WAIT_MS : passé ce délai on part sur la destination par défaut.
+    const idea = await withTimeout(getIdea(param), MAX_WAIT_MS);
+    applyBranding(idea);
+
+    // Le compteur de clics est toujours rattaché au vrai id (uuid), jamais
+    // au slug — et jamais attendu avant de rediriger (voir recordClick).
+    if(idea) recordClick(idea.id);
+
+    const destination = (idea && idea.destination_url) || DEFAULT_DESTINATION;
+
+    // Sécurité : on n'autorise que des URLs http(s) comme destination. Si
+    // un champ destination_url malformé ou dangereux (javascript:, data:…)
+    // finissait un jour en base, on refuse de l'utiliser plutôt que de
+    // laisser le navigateur l'exécuter — et on retombe sur le site par
+    // défaut.
+    let url;
+    try{
+      url = new URL(destination);
+      if(url.protocol !== 'http:' && url.protocol !== 'https:'){
+        url = new URL(DEFAULT_DESTINATION);
+      }
+    }catch(e){
+      url = new URL(DEFAULT_DESTINATION);
+    }
+
+    // Paramètres UTM personnalisés par idée (onglet Idées > Personnaliser
+    // ce lien, dans le dashboard) — ajoutés seulement s'ils sont définis.
+    if(idea && idea.utm_source) url.searchParams.set('utm_source', idea.utm_source);
+    if(idea && idea.utm_medium) url.searchParams.set('utm_medium', idea.utm_medium);
+    if(idea && idea.utm_campaign) url.searchParams.set('utm_campaign', idea.utm_campaign);
+
+    // On passe l'id en paramètre à la page de destination : le script Velo
+    // posé sur le site Au Grès du Sud (ou carte.augresdusud.com) peut le
+    // lire pour mémoriser "ce visiteur vient de l'idée X" pendant sa visite.
+    url.searchParams.set('creo_ref', idea ? idea.id : 'direct');
+
+    stopTagline();
+
+    // On attend le temps qu'il faut pour atteindre MIN_DISPLAY_MS depuis
+    // le tout début (mais jamais plus) avant de naviguer, pour que l'écran
+    // personnalisé ait vraiment eu le temps d'être vu.
+    const elapsed = Date.now() - startedAt;
+    const remaining = MIN_DISPLAY_MS - elapsed;
+    if(remaining > 0) await new Promise(r => setTimeout(r, remaining));
+
+    window.location.replace(url.toString());
+  }
+
+  go();
+</script>
+</body>
+</html>
